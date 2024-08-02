@@ -1,102 +1,136 @@
 import os
-import re
-import sys
 import urllib.parse as ulparse
 from pathlib import Path
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List
+
 from src.Utility import *
 from src.crawler.Album import Album
+import winshell
+from typing import Optional
 
 
 class Buondua:
-    def __init__(self,save_dir):
+    def __init__(self, save_dir):
         self.base_url = 'https://buondua.com/'
         self.save_dir = save_dir
-
-        self.black_list = ["tag"]
         self.hostname = "buondua"
-        self.log = "Log.txt"
 
-    def Download(self, downloader, url: str, overwrite: bool = True, headless: bool = False, indexOnly: bool = False):
+    def __getImagesFromPage(self, url: str):
+        images = list()
+        img_urls = openUrl(url).find(class_='article-fulltext').find_all('img')
+        for i, img_url in enumerate(img_urls):
+            image_url = img_url['src']
+            exts = image_url.split("/")
+            ext = exts[-1].split("?")[0]
+            images.append((Path(ext), image_url))
+        return images
 
-        def getImagesFromPage(url: str):
-            images = list()
-            img_urls = openUrl(url).find(class_='article-fulltext').find_all('img')
-            for i, img_url in enumerate(img_urls):
-                image_url = img_url['src']
-                exts = image_url.split("/")
-                ext = exts[-1].split("?")[0]
-                images.append((Path(ext).with_suffix(''), image_url))
-            return images
+    def ExtractAlbumsFromPage(self, url):  # ->Album:
+        site = openUrl(url)
+        albumURLs = [ulparse.urljoin(self.base_url, albumURL.find(class_="item-link").attrs["href"]) for albumURL
+                     in
+                     site.find_all(class_="item-thumb")]
+        return albumURLs
 
-        def getAlbum(url: str):
-            album = Album()
-            site = openUrl(url)
+    def ExtractAlbumFromURL(self, url) -> Optional[Album]:
+        album = Album()
+        site = openUrl(url)
 
-            if site is None:
-                raise Exception(f"url is not correct or site is unreachable")
+        album.title = slugify(os.path.basename(url), True)  # re.sub(r'[\\/:\*\?"<>\|]', "-", title)
+        album.path = os.path.join(self.save_dir, slugify(album.title, True))
+        if Path(album.path).exists():
+            return None
 
-            album.url = url
-            title = site.find(class_="article-header").find("h1").text
-            page_urls = site.find(class_="pagination-list").select("span > a")
-            album.tags = [span.text for span in site.find(class_="tags").select("a > span")]
-            album.title = re.sub(r'[\\/:\*\?"<>\|]', "-", title)
-            album.cache = openUrl(url, raw=True).content
-            if len(page_urls) <= 0:
-                raise print(f"Failed to find Album")
+        album.url = url
+        album.tags = [span.text for span in site.find(class_="tags").select("a > span")]
 
-            for i, page_url in enumerate(page_urls):
-                albumpage_url = ulparse.urljoin(self.base_url, page_url['href'])
-                page_images = getImagesFromPage(albumpage_url)
-                album.images += page_images
-            return album
+        page_urls = site.find(class_="pagination-list").select("span > a")
+        if len(page_urls) <= 0:
+            raise print(f"Failed to find Album")
 
-        album = getAlbum(url)
-        album_path = os.path.join(self.save_dir, slugify(album.title))
+        for i, page_url in enumerate(page_urls):
+            albumpage_url = ulparse.urljoin(self.base_url, page_url['href'])
+            page_images = self.__getImagesFromPage(albumpage_url)
+            album.images += page_images
+
+        return album
+
+    def ExtractFromTag(self, url) -> List[Album]:
+        maxAlbumsPerPage = 20
+        site = openUrl(url)
+        albums = list()
+
+        # 1 tag -> albumURLs
+        albumURLs = list()
+        pageAmount = max(len(site.find_all(class_="pagination-link")), 1)
+        pages = [url + f"?start={pageIndex * maxAlbumsPerPage}" for pageIndex in range(pageAmount)]
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.ExtractAlbumsFromPage, url) for url in pages]
+            for future in as_completed(futures):
+                albumURLs += (future.result())
+        print()
+        # 2 albumURLs-> albums
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.ExtractAlbumFromURL, url) for url in albumURLs]
+            for future in as_completed(futures):
+                albums.append(future.result())
+        albums = [item for item in albums if item is not None]
+        return albums
+
+    def DownloadAlbum(self, album: Album):
+        result = list()
+
         try:
-            Path(album_path).mkdir(parents=True, exist_ok=overwrite)
+            Path(album.path).mkdir(parents=True)
+        except Exception as e:
+            return result
 
-            for index in range(len(album.images)):
-                name, images = album.images[index]
-                file_path = Path(os.path.join(album_path, str(index + 1))).with_suffix('.png')
-                downloader.download_image_buondua(images, os.path.abspath(file_path))
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(DownloadImage, url, os.path.join(album.path, name)) for name, url in
+                       album.images]
+        for future in as_completed(futures):
+            re_success, re_url, re_path = future.result()
+            if not re_success:
+                result.append((re_path, re_url))
+        self.CreateJSON(album)
+        self.CreateTagShortcutFolders(album)
+        return result
 
-                sys.stdout.write('\r')
-                j = (index + 1) / len(album.images)
-                sys.stdout.write(f'[{index + 1}|{len(album.images)}]\t')
-                sys.stdout.write("[%-20s] %d%%" % ('=' * int(20 * j), 100 * j))
-                sys.stdout.write(f' @ {os.path.abspath(album_path)}')
-                sys.stdout.flush()
+    def CreateJSON(self, album):
+        filepath = os.path.join(album.path, "info.json")
+        data = (album.GetAsDict())
+        return CreateJSON(filepath, data)
 
-        except FileExistsError:
-            print(album.title, " already exists")
-        finally:
-            with open(os.path.join(album_path, "!Info.txt"), "w", encoding="utf-8") as file:
-                file.write(album.url)
-                tags = '\n'.join(album.tags)
-                file.write(f"\n\nTags: \n{tags}")
-            print("\n")
+    def CreateTagShortcutFolders(self, album: Album):
+        generalTagPath = os.path.join(self.save_dir, "!Tags")
+        for tag in album.tags:
+            tagPath = os.path.join(generalTagPath, tag)
+            Path(tagPath).mkdir(parents=True, exist_ok=True)
+            shortcut_path = os.path.join(tagPath, album.title + ".lnk")
+            shortcut = winshell.Shortcut(shortcut_path)
+            shortcut.path = album.path
+            shortcut.write()
 
-    def DownloadAlbums(self, downloader, file: str, overwrite: bool = True, headless: bool = False,
-                       indexOnly: bool = False):
-        def is_blacklisted(url):
-            # Parse the URL
-            parsed_url = ulparse.urlparse(url)
-            path = parsed_url.path
-            # Check if any blacklisted word is in the path
-            contains_blacklist = any(word in path for word in self.black_list)
+    def ExtractFromURL(self, urls: List[str]):
 
-            # URL must contain at least one required word and no blacklisted words
-            return contains_blacklist
+        def sort(link:str):
+            albums: List[Album] = list()
+            try:
+                if "tag" in link:
+                    albums += (self.ExtractFromTag(link))
+                else:
+                    album = self.ExtractAlbumFromURL(link)
+                    if album is not None:
+                        albums.append(album)
+            except Exception as e:
+                print(f"Error with {link}")
+                raise e
+            return albums
 
-        with open(file, 'r', encoding="utf-8") as file:
-            with open(self.log, "a", encoding="utf-8") as log:
-                lines = file.readlines()
-                for index in range(len(lines)):
-                    line = lines[index]
-
-                    if is_blacklisted(line):
-                        log.writelines(str(line))
-
-                    print(f"[{index + 1}|{len(lines)}] Album:")
-                    self.Download(downloader, line, overwrite, headless, indexOnly)
+        albums = list()
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(sort, url) for url in urls]
+            for future in as_completed(futures):
+                albums.append(future.result())
