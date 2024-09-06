@@ -1,4 +1,5 @@
 import time
+import sys
 
 from src.ArgParser import *
 from src.crawler.Crawler import *
@@ -56,24 +57,11 @@ def django_validate(url: str):
 
 def main(args: list):
     """Check if args is link or file"""
-    downloader = ImageDownloader()
     start = time.time()
-    if args != []:
-        for arg in args:
-            if not validate(str(arg)) or not str(arg).startswith(
-                    "https://buondua.com/"
-            ):  # check if url is validated, if not then assume that is a file
-                try:
-                    open(arg).close()  # check file is validated, if not then throw error
-                    crawl.DownloadAlbums(downloader=downloader, file=arg, overwrite=overwrite, indexOnly=indexOnly)
-                except Exception as e:
-                    print(e)
-            else:  # if url is validated
-                crawl.Download(downloader=downloader, url=arg, overwrite=overwrite, indexOnly=indexOnly)
-    else:  # if no arg was provided with --file parameter, download from list_of_links.txt
-        crawl.DownloadAlbums(downloader=downloader, file=fileLocation, overwrite=overwrite, indexOnly=indexOnly)
+    albums = crawl.ExtractFromURL(args)
+    with ThreadPoolExecutor() as executor:
+        [executor.submit(crawl.DownloadAlbum, album) for album in albums]
     end = time.time()
-    downloader.Quit()
     print(f'Finished Crawler with {round(end - start, 2)}s')
 
 

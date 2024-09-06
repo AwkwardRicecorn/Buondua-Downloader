@@ -16,6 +16,8 @@ class Buondua:
         self.base_url = 'https://buondua.com/'
         self.save_dir = save_dir
         self.hostname = "buondua"
+        self.totalItems = 0
+        self.downloadedItems = 0
 
     def __getImagesFromPage(self, url: str):
         images = list()
@@ -68,14 +70,15 @@ class Buondua:
         pages = [url + f"?start={pageIndex * maxAlbumsPerPage}" for pageIndex in range(pageAmount)]
         with ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.ExtractAlbumsFromPage, url) for url in pages]
-            for future in as_completed(futures):
-                albumURLs += (future.result())
-        print()
+        for future in as_completed(futures):
+            albumURLs += (future.result())
+        print(f"Albums:{len(albumURLs)}")
         # 2 albumURLs-> albums
         with ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.ExtractAlbumFromURL, url) for url in albumURLs]
-            for future in as_completed(futures):
-                albums.append(future.result())
+        for future in as_completed(futures):
+            albums.append(future.result())
+        print(f"Albums realized:{len(albumURLs)}")
         albums = [item for item in albums if item is not None]
         return albums
 
@@ -92,6 +95,7 @@ class Buondua:
                        album.images]
         for future in as_completed(futures):
             re_success, re_url, re_path = future.result()
+            self.downloadedItems +=1
             if not re_success:
                 result.append((re_path, re_url))
         self.CreateJSON(album)
@@ -132,5 +136,6 @@ class Buondua:
         albums = list()
         with ThreadPoolExecutor() as executor:
             futures = [executor.submit(sort, url) for url in urls]
-            for future in as_completed(futures):
-                albums.append(future.result())
+        for future in as_completed(futures):
+            albums += (future.result())
+        return albums

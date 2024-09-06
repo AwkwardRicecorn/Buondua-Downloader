@@ -8,7 +8,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
-from webdriver_manager.firefox import GeckoDriverManager
+#from webdriver_manager.firefox import GeckoDriverManager
 
 class presence_of_element_with_img_alt:
     def __init__(self, locator, alt_value):
@@ -30,13 +30,20 @@ class presence_of_element_with_img_alt:
 class ImageDownloader:
 
     def __init__(self, headless: bool = False):
+        """"ToDo:
+            - Implement Json for self.gecko to prevent API spam
+            """
         self.options = webdriver.FirefoxOptions()
         if (headless):
             self.options.add_argument('--headless')  # Run in headless mode
-        self.driver = webdriver.Firefox(service=FirefoxService(GeckoDriverManager().install()), options=self.options)
+        with open("init.json","r+") as file:
+            print("init.json exist")
+        self.gecko = GeckoDriverManager().install()
+        self.driver = webdriver.Firefox(service=FirefoxService(self.gecko), options=self.options)
 
     def __CreateDriver(self):
-        return webdriver.Firefox(service=FirefoxService(GeckoDriverManager().install()), options=self.options)
+        #FirefoxService(GeckoDriverManager().install()
+        return webdriver.Firefox(service=FirefoxService(self.gecko), options=self.options)
 
     def download_image_buondua(self, url: str, savingPath_with_file: str):
         self.driver.get(url)
